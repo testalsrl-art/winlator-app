@@ -15,6 +15,7 @@ import android.system.Os;
 import com.winlator.core.Callback;
 import com.winlator.core.FileUtils;
 import com.winlator.core.SerialPty;
+import com.winlator.core.WineRegistryEditor;
 import com.winlator.xenvironment.EnvironmentComponent;
 
 import java.io.File;
@@ -68,6 +69,23 @@ public class GPSSerialComponent extends EnvironmentComponent {
             handler.postDelayed(this, 1000);
         }
     };
+
+    /**
+     * Wine builds HKLM\HARDWARE\DEVICEMAP\SERIALCOMM (the list programs use to find COM ports) from
+     * /dev/tty* devices plus user-defined entries in HKLM\Software\Wine\Ports. Android has no usable
+     * /dev/ttyS*, so register our virtual ports there. Must happen before wineserver starts.
+     */
+    private void registerWinePorts() {
+        File systemRegFile = new File(dosdevicesDir.getParentFile(), "system.reg");
+        if (!systemRegFile.isFile()) return;
+
+        ArrayList<String[]> items = new ArrayList<>();
+        for (int i = 0; i < ports.size(); i++) items.add(new String[]{"COM"+(i+1), "/dev/pts/"+ports.get(i).number});
+
+        try (WineRegistryEditor registryEditor = new WineRegistryEditor(systemRegFile)) {
+            registryEditor.setStringValues("Software\\Wine\\Ports", items.toArray(new String[0][]));
+        }
+    }
 
     public void setStatusCallback(Callback<String> statusCallback) {
         this.statusCallback = statusCallback;
@@ -129,6 +147,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
             ports.add(port);
             FileUtils.symlink("/dev/pts/"+port.number, (new File(dosdevicesDir, "com"+i)).getPath());
         }
+        registerWinePorts();
 
         Context context = environment.getContext();
         hasPermission = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;

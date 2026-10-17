@@ -8,8 +8,8 @@ android {
         applicationId 'com.winlator'
         minSdkVersion 26
         targetSdkVersion 28
-        versionCode 35
-        versionName "11.2-gps2"
+        versionCode 36
+        versionName "11.2-gps3"
     }
 
     signingConfigs {
