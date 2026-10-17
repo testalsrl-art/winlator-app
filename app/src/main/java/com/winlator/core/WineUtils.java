@@ -98,6 +98,12 @@ public abstract class WineUtils {
         final String dllOverridesKey = "Software\\Wine\\DllOverrides";
 
         try (WineRegistryEditor registryEditor = new WineRegistryEditor(userRegFile)) {
+            File koreanSysFontFile = new File(userConfigDir, "koreanfont.applied");
+            if (Locale.getDefault().getLanguage().equals("ko") && !koreanSysFontFile.isFile()) {
+                setSystemFont(registryEditor, "NanumGothic");
+                FileUtils.writeString(koreanSysFontFile, String.valueOf(System.currentTimeMillis()));
+            }
+
             for (String name : direct3dLibs) registryEditor.setStringValue(dllOverridesKey, name, "native,builtin");
 
             registryEditor.removeKey("Software\\Winlator\\WFM\\ContextMenu\\7-Zip");
