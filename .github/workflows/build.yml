@@ -1,0 +1,45 @@
+name: Build APK
+
+on:
+  push:
+    branches: [gps-shortcut]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install NDK / CMake / platform
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;24.0.8215888" "cmake;3.22.1" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winlator-gps-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          cp "$APK" winlator-gps.apk
+          gh release create "gps-build-${{ github.run_number }}" winlator-gps.apk \
+            --title "Winlator GPS+Shortcut build ${{ github.run_number }}" \
+            --notes "Android GPS -> NMEA on virtual COM1-COM8, plus home-screen shortcut launcher."

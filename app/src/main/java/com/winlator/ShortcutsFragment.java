@@ -2,6 +2,10 @@ package com.winlator;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutManager;
+import android.graphics.drawable.Icon;
+import android.widget.Toast;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.LayoutInflater;
@@ -188,6 +192,7 @@ public class ShortcutsFragment extends BaseFileManagerFragment<Shortcut> {
             menu.findItem(R.id.menu_item_rename).setVisible(false);
             menu.findItem(R.id.menu_item_add_favorite).setVisible(false);
             menu.findItem(R.id.menu_item_info).setVisible(false);
+            menu.findItem(R.id.menu_item_add_home_screen).setVisible(!shortcut.file.isDirectory());
 
             listItemMenu.setOnMenuItemClickListener((menuItem) -> {
                 int itemId = menuItem.getItemId();
@@ -195,6 +200,9 @@ public class ShortcutsFragment extends BaseFileManagerFragment<Shortcut> {
                     case R.id.menu_item_settings:
                         clearClipboard();
                         (new ShortcutSettingsDialog(ShortcutsFragment.this, shortcut)).show();
+                        break;
+                    case R.id.menu_item_add_home_screen:
+                        pinToHomeScreen(context, shortcut);
                         break;
                     case R.id.menu_item_copy:
                     case R.id.menu_item_cut:
@@ -211,6 +219,27 @@ public class ShortcutsFragment extends BaseFileManagerFragment<Shortcut> {
                 return true;
             });
             listItemMenu.show();
+        }
+
+        private void pinToHomeScreen(Context context, Shortcut shortcut) {
+            ShortcutManager shortcutManager = context.getSystemService(ShortcutManager.class);
+            if (shortcutManager == null || !shortcutManager.isRequestPinShortcutSupported()) {
+                Toast.makeText(context, "Launcher does not support pinned shortcuts", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            Intent intent = new Intent(context, ShortcutLauncherActivity.class);
+            intent.setAction(ShortcutLauncherActivity.ACTION_RUN_SHORTCUT);
+            intent.putExtra("container_id", shortcut.container.id);
+            intent.putExtra("shortcut_path", shortcut.file.getPath());
+
+            ShortcutInfo.Builder builder = new ShortcutInfo.Builder(context, "winlator-"+shortcut.container.id+"-"+shortcut.file.getName())
+                .setShortLabel(shortcut.name)
+                .setIntent(intent);
+            if (shortcut.icon != null) builder.setIcon(Icon.createWithBitmap(shortcut.icon));
+            else builder.setIcon(Icon.createWithResource(context, R.mipmap.ic_launcher));
+
+            shortcutManager.requestPinShortcut(builder.build(), null);
         }
 
         private void runFromShortcut(Shortcut shortcut) {
