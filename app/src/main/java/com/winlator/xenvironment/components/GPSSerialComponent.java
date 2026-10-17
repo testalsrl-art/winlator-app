@@ -9,7 +9,10 @@ import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Process;
+import android.system.Os;
 
+import com.winlator.core.Callback;
 import com.winlator.core.FileUtils;
 import com.winlator.core.SerialPty;
 import com.winlator.xenvironment.EnvironmentComponent;
@@ -19,6 +22,8 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.Locale;
 import java.util.TimeZone;
 
@@ -40,6 +45,11 @@ public class GPSSerialComponent extends EnvironmentComponent {
     private LocationManager locationManager;
     private volatile Location lastLocation;
     private volatile boolean running = false;
+    private volatile Set<Integer> connectedPorts = new HashSet<>();
+    private volatile boolean hasPermission = false;
+    private Thread scanThread;
+    private long sentCount = 0;
+    private Callback<String> statusCallback;
 
     private final LocationListener locationListener = new LocationListener() {
         @Override public void onLocationChanged(Location location) { lastLocation = location; }
@@ -53,9 +63,58 @@ public class GPSSerialComponent extends EnvironmentComponent {
         public void run() {
             if (!running) return;
             sendNMEA(buildSentences(lastLocation));
+            sentCount++;
+            if (statusCallback != null) statusCallback.call(buildStatusText());
             handler.postDelayed(this, 1000);
         }
     };
+
+    public void setStatusCallback(Callback<String> statusCallback) {
+        this.statusCallback = statusCallback;
+    }
+
+    private String buildStatusText() {
+        String gps;
+        Location location = lastLocation;
+        if (!hasPermission) gps = "위치 권한 없음";
+        else if (locationManager == null || !locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) gps = "GPS 꺼짐";
+        else if (location == null || System.currentTimeMillis() - location.getTime() > 10000) gps = "신호 찾는 중...";
+        else gps = String.format(Locale.US, "수신 중 (오차 %dm)", location.hasAccuracy() ? Math.round(location.getAccuracy()) : 0);
+
+        Set<Integer> connected = connectedPorts;
+        String com;
+        if (connected.isEmpty()) com = "연결 대기 (프로그램이 COM 포트를 열지 않음)";
+        else {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 1; i <= PORT_COUNT; i++) if (connected.contains(i)) sb.append(sb.length() > 0 ? ", " : "").append("COM").append(i);
+            com = sb+" 연결됨";
+        }
+        return "GPS: "+gps+"\nCOM: "+com+" | 전송 "+sentCount+"회";
+    }
+
+    /** Finds which of our virtual ports another process (wine) currently has open, via /proc/<pid>/fd. */
+    private void scanConnectedPorts() {
+        HashSet<Integer> found = new HashSet<>();
+        String[] pids = (new File("/proc")).list();
+        int myPid = Process.myPid();
+        if (pids != null) {
+            for (String pid : pids) {
+                if (pid.isEmpty() || !Character.isDigit(pid.charAt(0)) || pid.equals(String.valueOf(myPid))) continue;
+                String[] fds = (new File("/proc/"+pid+"/fd")).list();
+                if (fds == null) continue;
+                for (String fd : fds) {
+                    try {
+                        String target = Os.readlink("/proc/"+pid+"/fd/"+fd);
+                        if (!target.startsWith("/dev/pts/")) continue;
+                        int number = Integer.parseInt(target.substring(9));
+                        for (int i = 0; i < ports.size(); i++) if (ports.get(i).number == number) found.add(i+1);
+                    }
+                    catch (Exception e) {}
+                }
+            }
+        }
+        connectedPorts = found;
+    }
 
     public GPSSerialComponent(File wineDosdevicesDir) {
         this.dosdevicesDir = wineDosdevicesDir;
@@ -72,7 +131,8 @@ public class GPSSerialComponent extends EnvironmentComponent {
         }
 
         Context context = environment.getContext();
-        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+        hasPermission = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        if (hasPermission) {
             locationManager = (LocationManager)context.getSystemService(Context.LOCATION_SERVICE);
             try {
                 lastLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
@@ -83,12 +143,23 @@ public class GPSSerialComponent extends EnvironmentComponent {
 
         running = true;
         handler.post(sender);
+
+        scanThread = new Thread(() -> {
+            while (running) {
+                scanConnectedPorts();
+                try { Thread.sleep(1500); } catch (InterruptedException e) { break; }
+            }
+        }, "gps-port-scan");
+        scanThread.setDaemon(true);
+        scanThread.start();
     }
 
     @Override
     public void stop() {
         running = false;
+        statusCallback = null;
         handler.removeCallbacks(sender);
+        if (scanThread != null) scanThread.interrupt();
         if (locationManager != null) {
             locationManager.removeUpdates(locationListener);
             locationManager = null;

@@ -229,6 +229,7 @@
     <string name="bring_to_front">Bring to Front</string>
     <string name="options">Options</string>
     <string name="logs">Logs</string>
+    <string name="gps_status">GPS Status</string>
     <string name="enable_wine_debug">Enable Wine debug</string>
     <string name="box64_logs">Box64 Logs</string>
     <string name="export">Export</string>

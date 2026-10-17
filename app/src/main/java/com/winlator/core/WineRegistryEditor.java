@@ -81,6 +81,22 @@ public class WineRegistryEditor implements Closeable {
         return str.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
+    /** Names starting with \u0001 are written verbatim (used for wine's \\xNNNN unicode escapes). */
+    private static String escapeName(String name) {
+        return name.startsWith("\u0001") ? name.substring(1) : escape(name);
+    }
+
+    public static String rawUnicodeName(String name) {
+        StringBuilder sb = new StringBuilder("\u0001");
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (c > 127) sb.append(String.format("\\x%04x", (int)c));
+            else if (c == '\\' || c == '"') sb.append('\\').append(c);
+            else sb.append(c);
+        }
+        return sb.toString();
+    }
+
     private static String unescape(String str) {
         return str.replace("\\\"", "\"").replace("\\\\", "\\");
     }
@@ -261,7 +277,7 @@ public class WineRegistryEditor implements Closeable {
             }
 
             if (valueLocation == null) {
-                writer.write("\n"+(name != null ? "\""+escape(name)+"\"" : "@")+"="+value);
+                writer.write("\n"+(name != null ? "\""+escapeName(name)+"\"" : "@")+"="+value);
             }
             else {
                 writer.write(value);
@@ -333,7 +349,7 @@ public class WineRegistryEditor implements Closeable {
             for (Location valueLocation : valueLocations) {
                 if (valueLocation.end != -1) continue;
                 String[] item = (String[])valueLocation.tag;
-                writer.write("\n"+(item[0] != null ? "\""+escape(item[0])+"\"" : "@")+"="+item[1]);
+                writer.write("\n"+(item[0] != null ? "\""+escapeName(item[0])+"\"" : "@")+"="+item[1]);
             }
 
             while ((length = reader.read(buffer)) != -1) writer.write(buffer, 0, length);
@@ -436,7 +452,7 @@ public class WineRegistryEditor implements Closeable {
 
     private Location getValueLocation(Location keyLocation, String name) {
         if (!cloneFile.isFile() || keyLocation.start == keyLocation.end) return null;
-        name = name != null ? "\""+escape(name)+"\"=" : "@=";
+        name = name != null ? "\""+escapeName(name)+"\"=" : "@=";
         int[] result = getValueLocation(cloneFile.getPath(), keyLocation.toIntArray(), name);
         Location location = new Location(result[0], result[1], result[2]);
         return location.start != -1 ? location : null;

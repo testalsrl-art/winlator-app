@@ -17,6 +17,8 @@ import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
+import android.view.Gravity;
+import android.widget.TextView;
 import android.widget.Spinner;
 
 import androidx.annotation.NonNull;
@@ -116,6 +118,8 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private FrameRating frameRating;
     private Runnable editInputControlsCallback;
     private Shortcut shortcut;
+    private GPSSerialComponent gpsSerialComponent;
+    private TextView gpsStatusView;
     private String[] graphicsDriver = {GraphicsDrivers.DEFAULT_VULKAN_DRIVER, GraphicsDrivers.DEFAULT_OPENGL_DRIVER};
     private String audioDriver = Container.DEFAULT_AUDIO_DRIVER;
     private String dxwrapper = Container.DEFAULT_DXWRAPPER;
@@ -410,6 +414,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 enterPictureInPictureMode(pipParams);
                 drawerLayout.closeDrawers();
                 break;
+            case R.id.menu_item_gps_status:
+                if (gpsStatusView != null) gpsStatusView.setVisibility(gpsStatusView.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+                drawerLayout.closeDrawers();
+                break;
             case R.id.menu_item_logs:
                 debugDialog.show();
                 drawerLayout.closeDrawers();
@@ -526,7 +534,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         environment.addComponent(new SysVSharedMemoryComponent(xServer, UnixSocketConfig.create(rootPath, UnixSocketConfig.SYSVSHM_SERVER_PATH)));
         environment.addComponent(new XServerComponent(xServer, UnixSocketConfig.create(rootPath, UnixSocketConfig.XSERVER_PATH)));
         environment.addComponent(new NetworkInfoUpdateComponent());
-        if (container != null) environment.addComponent(new GPSSerialComponent(new File(container.getRootDir(), ".wine/dosdevices")));
+        if (container != null) {
+            gpsSerialComponent = new GPSSerialComponent(new File(container.getRootDir(), ".wine/dosdevices"));
+            environment.addComponent(gpsSerialComponent);
+        }
 
         if (audioDriver.equals(AudioDrivers.ALSA)) {
             envVars.put("ANDROID_ALSA_SERVER", rootPath+UnixSocketConfig.ALSA_SERVER_PATH);
@@ -619,6 +630,20 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             frameRating.setMode(FrameRating.Mode.values()[container.getHUDMode()]);
             frameRating.setVisibility(View.GONE);
             rootView.addView(frameRating);
+        }
+
+        if (gpsSerialComponent != null) {
+            gpsStatusView = new TextView(this);
+            gpsStatusView.setTextColor(0xFFFFFFFF);
+            gpsStatusView.setBackgroundColor(0x99000000);
+            gpsStatusView.setTextSize(11);
+            gpsStatusView.setPadding(12, 6, 12, 6);
+            gpsStatusView.setClickable(false);
+            gpsStatusView.setFocusable(false);
+            gpsStatusView.setText("GPS: 시작 중...");
+            FrameLayout.LayoutParams gpsParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START);
+            rootView.addView(gpsStatusView, gpsParams);
+            gpsSerialComponent.setStatusCallback((text) -> gpsStatusView.setText(text));
         }
 
         if (shortcut != null) {

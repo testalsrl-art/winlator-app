@@ -17,6 +17,7 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.IOException;
 import java.util.Iterator;
+import java.util.ArrayList;
 import java.util.Locale;
 
 public abstract class WineUtils {
@@ -83,6 +84,8 @@ public abstract class WineUtils {
             registryEditor.setStringValue("Software\\Classes\\dllfile\\DefaultIcon", null, "shell32.dll,-154");
             registryEditor.setStringValue("Software\\Classes\\lnkfile\\DefaultIcon", null, "shell32.dll,-30");
             registryEditor.setStringValue("Software\\Classes\\inifile\\DefaultIcon", null, "shell32.dll,-151");
+
+            setupKoreanFonts(context, rootDir, registryEditor);
 
             File corefontsAddedFile = new File(userConfigDir, "corefonts.added");
             if (!corefontsAddedFile.isFile()) {
@@ -326,6 +329,48 @@ public abstract class WineUtils {
             registryEditor.setStringValue(key64, "CurrentBuildNumber", currentBuild);
             registryEditor.setStringValue(key64, "ProductName", "Microsoft "+winVersion.description);
         }
+    }
+
+    /** Installs NanumGothic and maps the usual Korean font names to it so Hangul text renders. */
+    private static void setupKoreanFonts(Context context, File rootDir, WineRegistryEditor registryEditor) {
+        File fontsDir = new File(rootDir, RootFS.WINEPREFIX+"/drive_c/windows/Fonts");
+        if (!fontsDir.isDirectory()) fontsDir.mkdirs();
+
+        final String[][] assetFiles = {{"fonts/NanumGothic-Regular.ttf", "NanumGothic.ttf"}, {"fonts/NanumGothic-Bold.ttf", "NanumGothicBold.ttf"}};
+        for (String[] item : assetFiles) {
+            File dest = new File(fontsDir, item[1]);
+            try (java.io.InputStream in = context.getAssets().open(item[0])) {
+                if (dest.isFile() && dest.length() == in.available()) continue;
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
+                    byte[] buffer = new byte[65536];
+                    int length;
+                    while ((length = in.read(buffer)) != -1) out.write(buffer, 0, length);
+                }
+            }
+            catch (java.io.IOException e) {
+                return;
+            }
+        }
+
+        final String[][] fonts = {
+            {"NanumGothic (TrueType)", "NanumGothic.ttf"},
+            {"NanumGothic Bold (TrueType)", "NanumGothicBold.ttf"}
+        };
+        registryEditor.setStringValues("Software\\Microsoft\\Windows\\CurrentVersion\\Fonts", fonts);
+        registryEditor.setStringValues("Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts", fonts);
+
+        final String[] koreanNames = {
+            "Gulim", "GulimChe", "Dotum", "DotumChe", "Batang", "BatangChe", "Gungsuh", "GungsuhChe", "Malgun Gothic",
+            "\uad74\ub9bc", "\uad74\ub9bc\uccb4", "\ub3cb\uc6c0", "\ub3cb\uc6c0\uccb4", "\ubc14\ud0d5", "\ubc14\ud0d5\uccb4",
+            "\uad81\uc11c", "\uad81\uc11c\uccb4", "\ub9d1\uc740 \uace0\ub515"
+        };
+        ArrayList<String[]> substitutes = new ArrayList<>();
+        for (String name : koreanNames) substitutes.add(new String[]{WineRegistryEditor.rawUnicodeName(name), "NanumGothic"});
+        if (Locale.getDefault().getLanguage().equals("ko")) {
+            substitutes.add(new String[]{"MS Shell Dlg", "NanumGothic"});
+            substitutes.add(new String[]{"MS Shell Dlg 2", "NanumGothic"});
+        }
+        registryEditor.setStringValues("Software\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes", substitutes.toArray(new String[0][]));
     }
 
     private static void setupSystemFonts(WineRegistryEditor registryEditor) {
