@@ -537,6 +537,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         if (container != null) {
             gpsSerialComponent = new GPSSerialComponent(new File(container.getRootDir(), ".wine/dosdevices"));
             environment.addComponent(gpsSerialComponent);
+            gpsSerialComponent.setStatusCallback((text) -> runOnUiThread(() -> {
+                if (gpsStatusView != null) gpsStatusView.setText(text);
+            }));
         }
 
         if (audioDriver.equals(AudioDrivers.ALSA)) {
@@ -632,7 +635,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             rootView.addView(frameRating);
         }
 
-        if (gpsSerialComponent != null) {
+        if (container != null) {
             gpsStatusView = new TextView(this);
             gpsStatusView.setTextColor(0xFFFFFFFF);
             gpsStatusView.setBackgroundColor(0x99000000);
@@ -643,7 +646,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             gpsStatusView.setText("GPS: 시작 중...");
             FrameLayout.LayoutParams gpsParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START);
             rootView.addView(gpsStatusView, gpsParams);
-            gpsSerialComponent.setStatusCallback((text) -> gpsStatusView.setText(text));
         }
 
         if (shortcut != null) {
