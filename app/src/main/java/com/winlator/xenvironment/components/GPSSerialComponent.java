@@ -50,6 +50,9 @@ public class GPSSerialComponent extends EnvironmentComponent {
     private volatile boolean hasPermission = false;
     private Thread scanThread;
     private long sentCount = 0;
+    private long okWrites = 0;
+    private volatile int lastOpenedPort = 0;
+    private volatile long lastOpenedAt = 0;
     private Callback<String> statusCallback;
 
     private final LocationListener locationListener = new LocationListener() {
@@ -101,13 +104,16 @@ public class GPSSerialComponent extends EnvironmentComponent {
 
         Set<Integer> connected = connectedPorts;
         String com;
-        if (connected.isEmpty()) com = "연결 대기 (프로그램이 COM 포트를 열지 않음)";
-        else {
+        if (!connected.isEmpty()) {
             StringBuilder sb = new StringBuilder();
             for (int i = 1; i <= PORT_COUNT; i++) if (connected.contains(i)) sb.append(sb.length() > 0 ? ", " : "").append("COM").append(i);
-            com = sb+" 연결됨";
+            com = sb+" 열려 있음";
         }
-        return "GPS: "+gps+"\nCOM: "+com+" | 전송 "+sentCount+"회";
+        else if (lastOpenedAt > 0) com = "닫힘 (마지막으로 COM"+lastOpenedPort+" 열림, "+((System.currentTimeMillis() - lastOpenedAt) / 1000)+"초 전)";
+        else com = "프로그램이 연 적 없음";
+
+        String portInfo = ports.isEmpty() ? "가상 포트 생성 실패!" : "가상 포트 "+ports.size()+"개 (COM1-COM"+ports.size()+", /dev/pts/"+ports.get(0).number+"...)";
+        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com;
     }
 
     /** Finds which of our virtual ports another process (wine) currently has open, via /proc/<pid>/fd. */
@@ -132,6 +138,10 @@ public class GPSSerialComponent extends EnvironmentComponent {
             }
         }
         connectedPorts = found;
+        if (!found.isEmpty()) {
+            lastOpenedAt = System.currentTimeMillis();
+            lastOpenedPort = java.util.Collections.min(found);
+        }
     }
 
     public GPSSerialComponent(File wineDosdevicesDir) {
@@ -166,7 +176,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         scanThread = new Thread(() -> {
             while (running) {
                 scanConnectedPorts();
-                try { Thread.sleep(1500); } catch (InterruptedException e) { break; }
+                try { Thread.sleep(250); } catch (InterruptedException e) { break; }
             }
         }, "gps-port-scan");
         scanThread.setDaemon(true);
@@ -189,7 +199,9 @@ public class GPSSerialComponent extends EnvironmentComponent {
 
     private void sendNMEA(String sentences) {
         byte[] data = sentences.getBytes(StandardCharsets.US_ASCII);
-        for (Port port : ports) SerialPty.write(port.master, port.slave, data, data.length);
+        for (Port port : ports) {
+            if (SerialPty.write(port.master, port.slave, data, data.length) > 0) okWrites++;
+        }
     }
 
     private static String withChecksum(String body) {
