@@ -102,6 +102,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
 
         if (this.envVars != null) envVars.putAll(this.envVars);
         installSerialShim(rootDir, envVars);
+        setTimeZoneEnv(envVars);
 
         File shmDir = new File(rootDir, "/tmp/shm");
         if (!shmDir.isDirectory()) shmDir.mkdirs();
@@ -114,6 +115,28 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
             }
             if (terminationCallback != null) terminationCallback.call(status);
         });
+    }
+
+    /**
+     * The rootfs has no zoneinfo data and nothing sets TZ, so wine ran on UTC and programs showed GPS (UTC) time
+     * unconverted. Pass the phone's current UTC offset as a POSIX TZ string (e.g. "KST-9", which needs no files).
+     * A TZ set in the container's environment variables wins.
+     */
+    private void setTimeZoneEnv(EnvVars envVars) {
+        String current = envVars.get("TZ");
+        if (current != null && !current.isEmpty()) return;
+
+        java.util.TimeZone timeZone = java.util.TimeZone.getDefault();
+        int offsetMinutes = timeZone.getOffset(System.currentTimeMillis()) / 60000;
+        String name = timeZone.getDisplayName(timeZone.inDaylightTime(new java.util.Date()), java.util.TimeZone.SHORT, java.util.Locale.US);
+        if (!name.matches("[A-Za-z]{3,6}")) name = "UTC";
+
+        // POSIX offsets are inverted: UTC+9 is written "-9"
+        int posix = -offsetMinutes;
+        String sign = posix < 0 ? "-" : "";
+        int abs = Math.abs(posix);
+        String value = name+sign+(abs / 60)+(abs % 60 != 0 ? ":"+String.format(java.util.Locale.US, "%02d", abs % 60) : "");
+        envVars.put("TZ", value);
     }
 
     /**
