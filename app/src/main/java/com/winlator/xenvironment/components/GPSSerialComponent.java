@@ -7,6 +7,7 @@ import android.location.GnssStatus;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.location.OnNmeaMessageListener;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -53,6 +54,12 @@ public class GPSSerialComponent extends EnvironmentComponent {
     private volatile Set<Integer> connectedPorts = new HashSet<>();
     private volatile boolean hasPermission = false;
     private Thread scanThread;
+    private final java.util.concurrent.ConcurrentLinkedQueue<String> nmeaQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final OnNmeaMessageListener nmeaListener = (message, timestamp) -> {
+        if (nmeaQueue.size() < 300) nmeaQueue.add(message);
+    };
+    private volatile int lastRawCount = 0;
+    private volatile int lastConvertedCount = 0;
     private volatile GnssStatus gnssStatus;
     private final GnssStatus.Callback gnssCallback = new GnssStatus.Callback() {
         @Override public void onSatelliteStatusChanged(GnssStatus status) { gnssStatus = status; }
@@ -76,7 +83,8 @@ public class GPSSerialComponent extends EnvironmentComponent {
         @Override
         public void run() {
             if (!running) return;
-            sendNMEA(buildSentences(lastLocation));
+            String raw = drainRawNmea();
+            sendNMEA(raw.isEmpty() ? buildSentences(lastLocation) : raw);
             sentCount++;
             if (statusCallback != null) statusCallback.call(buildStatusText());
             handler.postDelayed(this, 1000);
@@ -215,6 +223,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
                 lastLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
                 locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0, locationListener, Looper.getMainLooper());
                 locationManager.registerGnssStatusCallback(gnssCallback, handler);
+                locationManager.addNmeaListener(nmeaListener, handler);
             }
             catch (SecurityException | IllegalArgumentException e) {}
         }
@@ -242,6 +251,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         if (locationManager != null) {
             locationManager.removeUpdates(locationListener);
             locationManager.unregisterGnssStatusCallback(gnssCallback);
+            locationManager.removeNmeaListener(nmeaListener);
             locationManager = null;
         }
         for (Port port : ports) SerialPty.close(port.master, port.slave);
@@ -268,6 +278,32 @@ public class GPSSerialComponent extends EnvironmentComponent {
         double minutes = (abs - degrees) * 60.0;
         String hemisphere = isLat ? (value >= 0 ? "N" : "S") : (value >= 0 ? "E" : "W");
         return String.format(Locale.US, isLat ? "%02d%07.4f,%s" : "%03d%07.4f,%s", degrees, minutes, hemisphere);
+    }
+
+    /**
+     * Phone's own NMEA: every original sentence is forwarded as is, and each GN* sentence
+     * (multi-constellation talker) is also forwarded as a GP* copy with a recalculated checksum,
+     * because older navigation programs only recognise $GPxxx.
+     */
+    private String drainRawNmea() {
+        StringBuilder sb = new StringBuilder();
+        int raw = 0, converted = 0;
+        String message;
+        while ((message = nmeaQueue.poll()) != null) {
+            String s = message.trim();
+            if (s.length() < 8 || s.charAt(0) != '$') continue;
+            sb.append(s).append("\r\n");
+            raw++;
+            if (s.startsWith("$GN")) {
+                int star = s.indexOf('*');
+                String body = star > 0 ? s.substring(1, star) : s.substring(1);
+                sb.append(withChecksum("GP"+body.substring(2)));
+                converted++;
+            }
+        }
+        lastRawCount = raw;
+        lastConvertedCount = converted;
+        return sb.toString();
     }
 
     private ArrayList<Sat> gpsSatellites() {
