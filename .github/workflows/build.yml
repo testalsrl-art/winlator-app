@@ -33,6 +33,11 @@ jobs:
           echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
           echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> "$GITHUB_ENV"
 
+      - name: Build x86_64 serial ioctl shim
+        run: |
+          gcc -shared -fPIC -O2 -Wall -o app/src/main/assets/libwinlator_serial.so tools/serialshim.c -ldl
+          file app/src/main/assets/libwinlator_serial.so
+
       - name: Build debug APK
         run: |
           chmod +x gradlew

@@ -101,6 +101,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
         envVars.put("ANDROID_SYSVSHM_SERVER", rootDir+UnixSocketConfig.SYSVSHM_SERVER_PATH);
 
         if (this.envVars != null) envVars.putAll(this.envVars);
+        installSerialShim(rootDir, envVars);
 
         File shmDir = new File(rootDir, "/tmp/shm");
         if (!shmDir.isDirectory()) shmDir.mkdirs();
@@ -113,6 +114,25 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
             }
             if (terminationCallback != null) terminationCallback.call(status);
         });
+    }
+
+    /**
+     * Preloads a tiny x86_64 shim into wine (through box64) that emulates the tty ioctls Android blocks, so
+     * GetCommState/SetCommState work on the virtual COM ports. Set WINLATOR_SERIAL_SHIM=0 in the container's
+     * environment variables to turn it off.
+     */
+    private void installSerialShim(File rootDir, EnvVars envVars) {
+        if ("0".equals(envVars.get("WINLATOR_SERIAL_SHIM"))) return;
+        try {
+            File shimFile = new File(rootDir, "/usr/local/lib/libwinlator_serial.so");
+            shimFile.getParentFile().mkdirs();
+            FileUtils.copy(environment.getContext(), "libwinlator_serial.so", shimFile);
+            if (!shimFile.isFile() || shimFile.length() == 0) return;
+
+            String current = envVars.get("BOX64_LD_PRELOAD");
+            envVars.put("BOX64_LD_PRELOAD", current != null && !current.isEmpty() ? current+":"+shimFile.getPath() : shimFile.getPath());
+        }
+        catch (Exception e) {}
     }
 
     private void extractBox64File() {
