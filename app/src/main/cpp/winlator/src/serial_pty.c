@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <termios.h>
+#include <sys/ioctl.h>
 #include <string.h>
 
 // Virtual serial port helper: creates a pty pair. The slave (/dev/pts/N) is
@@ -64,4 +65,21 @@ JNIEXPORT void JNICALL
 Java_com_winlator_core_SerialPty_close(JNIEnv *env, jclass obj, jint master, jint slave) {
     if (slave >= 0) close(slave);
     if (master >= 0) close(master);
+}
+
+// Bytes still unread in the slave's input queue (data we sent that the program has not read yet).
+JNIEXPORT jint JNICALL
+Java_com_winlator_core_SerialPty_queued(JNIEnv *env, jclass obj, jint slave) {
+    int n = 0;
+    if (ioctl(slave, FIONREAD, &n) < 0) return -1;
+    return n;
+}
+
+// Non-blocking read of what the guest program wrote to the port.
+JNIEXPORT jint JNICALL
+Java_com_winlator_core_SerialPty_readMaster(JNIEnv *env, jclass obj, jint master, jbyteArray buffer, jint max) {
+    jbyte *bytes = (*env)->GetByteArrayElements(env, buffer, NULL);
+    int count = read(master, bytes, max);
+    (*env)->ReleaseByteArrayElements(env, buffer, bytes, 0);
+    return count;
 }

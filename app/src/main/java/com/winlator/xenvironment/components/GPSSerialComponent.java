@@ -37,6 +37,9 @@ public class GPSSerialComponent extends EnvironmentComponent {
 
     private static class Port {
         final int master, slave, number;
+        volatile int queuedBefore = 0;      // unread bytes left from the previous second (0 = the program reads the data)
+        volatile long rxBytes = 0;          // bytes the guest program wrote to this port
+        volatile String rxSample = "";
         Port(int[] v) { master = v[0]; slave = v[1]; number = v[2]; }
     }
 
@@ -113,7 +116,32 @@ public class GPSSerialComponent extends EnvironmentComponent {
         else com = "프로그램이 연 적 없음";
 
         String portInfo = ports.isEmpty() ? "가상 포트 생성 실패!" : "가상 포트 "+ports.size()+"개 (COM1-COM"+ports.size()+", /dev/pts/"+ports.get(0).number+"...)";
-        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com;
+        int focus = !connected.isEmpty() ? java.util.Collections.min(connected) : lastOpenedPort;
+        String detail = "";
+        if (focus > 0 && focus <= ports.size()) {
+            Port port = ports.get(focus - 1);
+            detail = "\nCOM"+focus+": 안 읽힌 데이터 "+port.queuedBefore+"B | 앱이 보낸 "+port.rxBytes+"B"+(port.rxSample.isEmpty() ? "" : " ["+port.rxSample+"]");
+        }
+        long totalRx = 0;
+        for (Port port : ports) totalRx += port.rxBytes;
+        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com+detail+"\n앱→포트 전체 "+totalRx+"B";
+    }
+
+    private final byte[] rxBuffer = new byte[256];
+
+    private void drainProgramOutput() {
+        for (Port port : new ArrayList<>(ports)) {
+            int count;
+            while ((count = SerialPty.readMaster(port.master, rxBuffer, rxBuffer.length)) > 0) {
+                port.rxBytes += count;
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < Math.min(count, 24); i++) {
+                    int c = rxBuffer[i] & 0xFF;
+                    sb.append(c >= 32 && c < 127 ? String.valueOf((char)c) : String.format(Locale.US, "\\x%02X", c));
+                }
+                port.rxSample = sb.toString();
+            }
+        }
     }
 
     /** Finds which of our virtual ports another process (wine) currently has open, via /proc/<pid>/fd. */
@@ -176,6 +204,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         scanThread = new Thread(() -> {
             while (running) {
                 scanConnectedPorts();
+                drainProgramOutput();
                 try { Thread.sleep(250); } catch (InterruptedException e) { break; }
             }
         }, "gps-port-scan");
@@ -199,6 +228,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
 
     private void sendNMEA(String sentences) {
         byte[] data = sentences.getBytes(StandardCharsets.US_ASCII);
+        for (Port port : ports) port.queuedBefore = Math.max(0, SerialPty.queued(port.slave));
         for (Port port : ports) {
             if (SerialPty.write(port.master, port.slave, data, data.length) > 0) okWrites++;
         }

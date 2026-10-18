@@ -9,4 +9,6 @@ public abstract class SerialPty {
     public static native int[] openPty();
     public static native int write(int master, int slave, byte[] data, int length);
     public static native void close(int master, int slave);
+    public static native int queued(int slave);
+    public static native int readMaster(int master, byte[] buffer, int max);
 }
