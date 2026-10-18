@@ -3,6 +3,7 @@ package com.winlator.xenvironment.components;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.location.GnssStatus;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
@@ -52,6 +53,12 @@ public class GPSSerialComponent extends EnvironmentComponent {
     private volatile Set<Integer> connectedPorts = new HashSet<>();
     private volatile boolean hasPermission = false;
     private Thread scanThread;
+    private volatile GnssStatus gnssStatus;
+    private final GnssStatus.Callback gnssCallback = new GnssStatus.Callback() {
+        @Override public void onSatelliteStatusChanged(GnssStatus status) { gnssStatus = status; }
+    };
+
+    private static class Sat { int prn, elev, az, snr; boolean used; }
     private long sentCount = 0;
     private long okWrites = 0;
     private volatile int lastOpenedPort = 0;
@@ -124,7 +131,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         }
         long totalRx = 0;
         for (Port port : ports) totalRx += port.rxBytes;
-        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com+detail+"\n앱→포트 전체 "+totalRx+"B";
+        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com+detail+"\n앱→포트 전체 "+totalRx+"B\nWine 포트 등록: "+countWineRegistered()+"/"+ports.size();
     }
 
     private final byte[] rxBuffer = new byte[256];
@@ -142,6 +149,19 @@ public class GPSSerialComponent extends EnvironmentComponent {
                 port.rxSample = sb.toString();
             }
         }
+    }
+
+    /** Our pre-created links use "/dev/pts/../pts/N"; wine's mountmgr re-creates them as "/dev/pts/N" when it registers a port. */
+    private int countWineRegistered() {
+        int count = 0;
+        for (int i = 0; i < ports.size(); i++) {
+            try {
+                String target = Os.readlink((new File(dosdevicesDir, "com"+(i+1))).getPath());
+                if (target.equals("/dev/pts/"+ports.get(i).number)) count++;
+            }
+            catch (Exception e) {}
+        }
+        return count;
     }
 
     /** Finds which of our virtual ports another process (wine) currently has open, via /proc/<pid>/fd. */
@@ -183,7 +203,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
             if (values == null) continue;
             Port port = new Port(values);
             ports.add(port);
-            FileUtils.symlink("/dev/pts/"+port.number, (new File(dosdevicesDir, "com"+i)).getPath());
+            FileUtils.symlink("/dev/pts/../pts/"+port.number, (new File(dosdevicesDir, "com"+i)).getPath());
         }
         registerWinePorts();
 
@@ -194,6 +214,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
             try {
                 lastLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
                 locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0, locationListener, Looper.getMainLooper());
+                locationManager.registerGnssStatusCallback(gnssCallback, handler);
             }
             catch (SecurityException | IllegalArgumentException e) {}
         }
@@ -220,6 +241,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         if (scanThread != null) scanThread.interrupt();
         if (locationManager != null) {
             locationManager.removeUpdates(locationListener);
+            locationManager.unregisterGnssStatusCallback(gnssCallback);
             locationManager = null;
         }
         for (Port port : ports) SerialPty.close(port.master, port.slave);
@@ -248,6 +270,39 @@ public class GPSSerialComponent extends EnvironmentComponent {
         return String.format(Locale.US, isLat ? "%02d%07.4f,%s" : "%03d%07.4f,%s", degrees, minutes, hemisphere);
     }
 
+    private ArrayList<Sat> gpsSatellites() {
+        ArrayList<Sat> list = new ArrayList<>();
+        GnssStatus status = gnssStatus;
+        if (status == null) return list;
+        for (int i = 0; i < status.getSatelliteCount(); i++) {
+            if (status.getConstellationType(i) != GnssStatus.CONSTELLATION_GPS) continue;
+            Sat sat = new Sat();
+            sat.prn = status.getSvid(i);
+            sat.elev = (int)status.getElevationDegrees(i);
+            sat.az = (int)status.getAzimuthDegrees(i);
+            sat.snr = (int)status.getCn0DbHz(i);
+            sat.used = status.usedInFix(i);
+            list.add(sat);
+        }
+        return list;
+    }
+
+    private String buildGSV(ArrayList<Sat> sats) {
+        int n = sats.size();
+        if (n == 0) return withChecksum("GPGSV,1,1,00");
+        int total = (n + 3) / 4;
+        StringBuilder sb = new StringBuilder();
+        for (int m = 0; m < total; m++) {
+            String body = String.format(Locale.US, "GPGSV,%d,%d,%02d", total, m+1, n);
+            for (int k = m * 4; k < Math.min(n, m * 4 + 4); k++) {
+                Sat sat = sats.get(k);
+                body += String.format(Locale.US, ",%02d,%02d,%03d,%02d", sat.prn, Math.max(0, sat.elev), Math.max(0, sat.az), Math.max(0, sat.snr));
+            }
+            sb.append(withChecksum(body));
+        }
+        return sb.toString();
+    }
+
     private String buildSentences(Location location) {
         Date now = new Date();
         SimpleDateFormat timeFormat = new SimpleDateFormat("HHmmss.00", Locale.US);
@@ -263,7 +318,17 @@ public class GPSSerialComponent extends EnvironmentComponent {
                    withChecksum("GPGGA,"+time+",,,,,0,00,,,M,,M,,");
         }
 
-        int satellites = location.getExtras() != null ? location.getExtras().getInt("satellites", 0) : 0;
+        ArrayList<Sat> sats = gpsSatellites();
+        int usedCount = 0;
+        StringBuilder slots = new StringBuilder();
+        for (Sat sat : sats) {
+            if (!sat.used || usedCount >= 12) continue;
+            slots.append(String.format(Locale.US, "%02d,", sat.prn));
+            usedCount++;
+        }
+        for (int i = usedCount; i < 12; i++) slots.append(",");
+
+        int satellites = usedCount > 0 ? usedCount : (location.getExtras() != null ? location.getExtras().getInt("satellites", 0) : 0);
         if (satellites <= 0) satellites = 6;
         float accuracy = location.hasAccuracy() ? location.getAccuracy() : 5f;
         double hdop = Math.max(0.5, accuracy / 5.0);
@@ -276,7 +341,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         String gga = String.format(Locale.US, "GPGGA,%s,%s,%s,1,%02d,%.1f,%.1f,M,0.0,M,,", time, lat, lon, satellites, hdop, location.getAltitude());
         String rmc = String.format(Locale.US, "GPRMC,%s,A,%s,%s,%.1f,%.1f,%s,,,A", time, lat, lon, speedKnots, course, date);
         String vtg = String.format(Locale.US, "GPVTG,%.1f,T,,M,%.1f,N,%.1f,K,A", course, speedKnots, speedKmh);
-        String gsa = String.format(Locale.US, "GPGSA,A,3,,,,,,,,,,,,,%.1f,%.1f,%.1f", hdop*1.5, hdop, hdop*1.2);
-        return withChecksum(gga) + withChecksum(gsa) + withChecksum(rmc) + withChecksum(vtg);
+        String gsa = String.format(Locale.US, "GPGSA,A,3,%s%.1f,%.1f,%.1f", slots, hdop*1.5, hdop, hdop*1.2);
+        return withChecksum(gga) + withChecksum(gsa) + buildGSV(sats) + withChecksum(rmc) + withChecksum(vtg);
     }
 }
