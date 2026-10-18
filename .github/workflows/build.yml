@@ -43,12 +43,18 @@ jobs:
           name: winlator-gps-apk
           path: app/build/outputs/apk/debug/*.apk
 
+      - name: Build serial test tool (Windows exe)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-i686
+          i686-w64-mingw32-gcc -O2 -static -o serialtest.exe tools/serialtest.c
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
           cp "$APK" winlator-gps.apk
-          gh release create "gps-build-${{ github.run_number }}" winlator-gps.apk \
+          gh release create "gps-build-${{ github.run_number }}" winlator-gps.apk serialtest.exe \
             --title "Winlator GPS+Shortcut build ${{ github.run_number }}" \
             --notes "Android GPS -> NMEA on virtual COM1-COM8, plus home-screen shortcut launcher."
