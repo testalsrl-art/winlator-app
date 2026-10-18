@@ -139,7 +139,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         }
         long totalRx = 0;
         for (Port port : ports) totalRx += port.rxBytes;
-        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com+detail+"\n앱→포트 전체 "+totalRx+"B\nWine 포트 등록: "+countWineRegistered()+"/"+ports.size();
+        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com+detail+"\n앱→포트 전체 "+totalRx+"B\nWine 포트 등록: "+countWineRegistered()+"/"+ports.size()+"\n폰 원본 NMEA: 초당 "+lastRawCount+"줄 (GP 변환 "+lastConvertedCount+"줄 추가)"+(lastRawCount == 0 ? " → 원본 없음, 합성 문장 사용" : "");
     }
 
     private final byte[] rxBuffer = new byte[256];
