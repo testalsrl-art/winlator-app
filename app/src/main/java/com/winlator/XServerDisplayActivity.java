@@ -120,6 +120,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private Shortcut shortcut;
     private GPSSerialComponent gpsSerialComponent;
     private TextView gpsStatusView;
+    private boolean hideCursor = false;
     private String[] graphicsDriver = {GraphicsDrivers.DEFAULT_VULKAN_DRIVER, GraphicsDrivers.DEFAULT_OPENGL_DRIVER};
     private String audioDriver = Container.DEFAULT_AUDIO_DRIVER;
     private String dxwrapper = Container.DEFAULT_DXWRAPPER;
@@ -250,7 +251,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             @Override
             public void onMapWindow(Window window) {
                 if (!flags[0] && window.isRenderable() && !window.getClassName().isEmpty()) {
-                    xServerView.getRenderer().setCursorVisible(true);
+                    xServerView.getRenderer().setCursorVisible(!hideCursor);
                     preloaderDialog.closeOnUiThread();
                     flags[0] = true;
                 }
@@ -412,6 +413,12 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                     .setAspectRatio(screenInfo.aspectRatio())
                     .build();
                 enterPictureInPictureMode(pipParams);
+                drawerLayout.closeDrawers();
+                break;
+            case R.id.menu_item_toggle_cursor:
+                hideCursor = !hideCursor;
+                preferences.edit().putBoolean("hide_cursor", hideCursor).apply();
+                xServerView.getRenderer().setCursorVisible(!hideCursor);
                 drawerLayout.closeDrawers();
                 break;
             case R.id.menu_item_gps_status:
@@ -599,6 +606,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         FrameLayout rootView = findViewById(R.id.FLXServerDisplay);
         xServerView = new XServerView(this, xServer);
         final GLRenderer renderer = xServerView.getRenderer();
+        hideCursor = preferences.getBoolean("hide_cursor", false);
         renderer.setCursorVisible(false);
         renderer.setCursorColor(preferences.getInt("cursor_color", 0xffffff));
         renderer.setCursorScale(preferences.getFloat("cursor_scale", 1.0f));
@@ -728,7 +736,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             touchpadView.setEnabled(false);
         }
         else {
-            renderer.setCursorVisible(true);
+            renderer.setCursorVisible(!hideCursor);
             touchpadView.setEnabled(true);
         }
 
