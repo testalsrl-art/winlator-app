@@ -754,7 +754,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         if (!touchpadView.isEnabled()) {
             touchpadView.setEnabled(true);
-            xServerView.getRenderer().setCursorVisible(true);
+            xServerView.getRenderer().setCursorVisible(!hideCursor);
         }
 
         inputControlsView.invalidate();
