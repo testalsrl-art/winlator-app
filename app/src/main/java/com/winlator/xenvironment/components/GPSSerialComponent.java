@@ -268,7 +268,27 @@ public class GPSSerialComponent extends EnvironmentComponent {
         ports.clear();
     }
 
+    /**
+     * GINI reads up to 2 KB at a time and throws the whole chunk away if any byte is outside '$'..'Z' (CR/LF
+     * allowed), and it clears its GPS data whenever it sees a sentence other than $GPGGA/$GPGSA/$GPGSV/$GPRMC.
+     * So only those four kinds of lines, made of allowed characters, are sent (unless raw relay is requested).
+     */
+    private static String keepOnlyDigestible(String sentences) {
+        StringBuilder out = new StringBuilder();
+        for (String line : sentences.split("\r\n")) {
+            if (!(line.startsWith("$GPGGA,") || line.startsWith("$GPGSA,") || line.startsWith("$GPGSV,") || line.startsWith("$GPRMC,"))) continue;
+            boolean clean = true;
+            for (int i = 0; i < line.length(); i++) {
+                char c = line.charAt(i);
+                if (c < 0x24 || c > 0x5A) { clean = false; break; }
+            }
+            if (clean) out.append(line).append("\r\n");
+        }
+        return out.toString();
+    }
+
     private void sendNMEA(String sentences) {
+        if (!forwardRawOriginals) sentences = keepOnlyDigestible(sentences);
         byte[] data = sentences.getBytes(StandardCharsets.US_ASCII);
         for (Port port : ports) port.queuedBefore = Math.max(0, SerialPty.queued(port.slave));
         for (Port port : ports) {
@@ -338,8 +358,6 @@ public class GPSSerialComponent extends EnvironmentComponent {
         switch (type) {
             case "RMC": keep = 13; break;
             case "GGA": keep = 15; break;
-            case "VTG": keep = 10; break;
-            case "GLL": keep = 8; break;
             default: return null;
         }
         int n = Math.min(keep, f.length);
@@ -460,6 +478,6 @@ public class GPSSerialComponent extends EnvironmentComponent {
         String rmc = String.format(Locale.US, "GPRMC,%s,A,%s,%s,%.1f,%.1f,%s,,,A", time, lat, lon, speedKnots, course, date);
         String vtg = String.format(Locale.US, "GPVTG,%.1f,T,,M,%.1f,N,%.1f,K,A", course, speedKnots, speedKmh);
         String gsa = String.format(Locale.US, "GPGSA,A,3,%s%.1f,%.1f,%.1f", slots, hdop*1.5, hdop, hdop*1.2);
-        return withChecksum(gga) + withChecksum(gsa) + buildGSV(sats) + withChecksum(rmc) + withChecksum(vtg);
+        return withChecksum(gga) + withChecksum(gsa) + buildGSV(sats) + withChecksum(rmc);
     }
 }
