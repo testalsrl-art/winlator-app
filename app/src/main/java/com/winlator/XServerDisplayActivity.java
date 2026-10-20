@@ -542,7 +542,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         environment.addComponent(new XServerComponent(xServer, UnixSocketConfig.create(rootPath, UnixSocketConfig.XSERVER_PATH)));
         environment.addComponent(new NetworkInfoUpdateComponent());
         if (container != null) {
-            gpsSerialComponent = new GPSSerialComponent(new File(container.getRootDir(), ".wine/dosdevices"));
+            gpsSerialComponent = new GPSSerialComponent(new File(container.getRootDir(), ".wine/dosdevices"), "1".equals(envVars.get("GPS_RAW_ORIGINALS")));
             environment.addComponent(gpsSerialComponent);
             gpsSerialComponent.setStatusCallback((text) -> runOnUiThread(() -> {
                 if (gpsStatusView != null) gpsStatusView.setText(text);

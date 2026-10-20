@@ -139,7 +139,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         }
         long totalRx = 0;
         for (Port port : ports) totalRx += port.rxBytes;
-        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com+detail+"\n앱→포트 전체 "+totalRx+"B\nWine 포트 등록: "+countWineRegistered()+"/"+ports.size()+"\n폰 원본 NMEA: 초당 "+lastRawCount+"줄 (GP 변환 "+lastConvertedCount+"줄 추가)"+(lastRawCount == 0 ? " → 원본 없음, 합성 문장 사용" : "")+satelliteSummary();
+        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com+detail+"\n앱→포트 전체 "+totalRx+"B\nWine 포트 등록: "+countWineRegistered()+"/"+ports.size()+"\n폰 원본 NMEA: 초당 "+lastRawCount+"줄 (GP 변환 "+lastConvertedCount+"줄 추가)"+(lastRawCount == 0 ? " → 원본 없음, 합성 문장 사용" : "")+(forwardRawOriginals ? " [원본도 전송]" : " [원본 미전송]")+satelliteSummary();
     }
 
     private final byte[] rxBuffer = new byte[256];
@@ -207,8 +207,11 @@ public class GPSSerialComponent extends EnvironmentComponent {
         }
     }
 
-    public GPSSerialComponent(File wineDosdevicesDir) {
+    private final boolean forwardRawOriginals;
+
+    public GPSSerialComponent(File wineDosdevicesDir, boolean forwardRawOriginals) {
         this.dosdevicesDir = wineDosdevicesDir;
+        this.forwardRawOriginals = forwardRawOriginals;
     }
 
     @Override
@@ -311,7 +314,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
                 if (legacy != null) { sb.append(legacy); converted++; continue; }
             }
 
-            sb.append(s).append("\r\n");
+            if (forwardRawOriginals) sb.append(s).append("\r\n");
             if (talker.equals("GN")) {
                 String legacy = legacySentence(s, type);
                 if (legacy != null) { sb.append(legacy); converted++; }
@@ -323,7 +326,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
     }
 
     /**
-     * GN*/GP* sentence as an old-spec $GP sentence. NMEA 4.10 added fields (RMC: navigational status), and
+     * A GN or GP sentence as an old-spec $GP sentence. NMEA 4.10 added fields (RMC: navigational status), and
      * the navigation programs only accept the exact old field counts (e.g. ATLAN: GGA 16, GSA 19, RMC 14/13
      * including the checksum token), so extra trailing fields are dropped and the checksum recalculated.
      */
