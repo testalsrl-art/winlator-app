@@ -84,7 +84,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         public void run() {
             if (!running) return;
             String raw = drainRawNmea();
-            sendNMEA(raw.isEmpty() ? buildSentences(lastLocation) : raw);
+            sendNMEA(raw.isEmpty() ? buildSentences(lastLocation) : raw + buildSatelliteSentences());
             sentCount++;
             if (statusCallback != null) statusCallback.call(buildStatusText());
             handler.postDelayed(this, 1000);
@@ -139,7 +139,7 @@ public class GPSSerialComponent extends EnvironmentComponent {
         }
         long totalRx = 0;
         for (Port port : ports) totalRx += port.rxBytes;
-        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com+detail+"\n앱→포트 전체 "+totalRx+"B\nWine 포트 등록: "+countWineRegistered()+"/"+ports.size()+"\n폰 원본 NMEA: 초당 "+lastRawCount+"줄 (GP 변환 "+lastConvertedCount+"줄 추가)"+(lastRawCount == 0 ? " → 원본 없음, 합성 문장 사용" : "");
+        return "GPS: "+gps+"\n"+portInfo+" | 쓰기 "+okWrites+"회\nCOM: "+com+detail+"\n앱→포트 전체 "+totalRx+"B\nWine 포트 등록: "+countWineRegistered()+"/"+ports.size()+"\n폰 원본 NMEA: 초당 "+lastRawCount+"줄 (GP 변환 "+lastConvertedCount+"줄 추가)"+(lastRawCount == 0 ? " → 원본 없음, 합성 문장 사용" : "")+satelliteSummary();
     }
 
     private final byte[] rxBuffer = new byte[256];
@@ -157,6 +157,13 @@ public class GPSSerialComponent extends EnvironmentComponent {
                 port.rxSample = sb.toString();
             }
         }
+    }
+
+    private String satelliteSummary() {
+        ArrayList<Sat> sats = gpsSatellites();
+        int used = 0;
+        for (Sat sat : sats) if (sat.used) used++;
+        return "\n위성(전체 합산): 보임 "+sats.size()+" / 사용 "+used;
     }
 
     /** Our pre-created links use "/dev/pts/../pts/N"; wine's mountmgr re-creates them as "/dev/pts/N" when it registers a port. */
@@ -292,13 +299,22 @@ public class GPSSerialComponent extends EnvironmentComponent {
         while ((message = nmeaQueue.poll()) != null) {
             String s = message.trim();
             if (s.length() < 8 || s.charAt(0) != '$') continue;
-            sb.append(s).append("\r\n");
             raw++;
-            if (s.startsWith("$GN")) {
-                int star = s.indexOf('*');
-                String body = star > 0 ? s.substring(1, star) : s.substring(1);
-                sb.append(withChecksum("GP"+body.substring(2)));
-                converted++;
+            String talker = s.substring(1, 3);
+            String type = s.substring(3, 6);
+
+            if (talker.equals("GP")) {
+                // The phone's own $GP sentences follow NMEA 4.10 (extra fields), which old programs reject
+                // field-count checks on. Satellite sentences are rebuilt in buildSatelliteSentences().
+                if (type.equals("GSA") || type.equals("GSV")) continue;
+                String legacy = legacySentence(s, type);
+                if (legacy != null) { sb.append(legacy); converted++; continue; }
+            }
+
+            sb.append(s).append("\r\n");
+            if (talker.equals("GN")) {
+                String legacy = legacySentence(s, type);
+                if (legacy != null) { sb.append(legacy); converted++; }
             }
         }
         lastRawCount = raw;
@@ -306,18 +322,81 @@ public class GPSSerialComponent extends EnvironmentComponent {
         return sb.toString();
     }
 
+    /**
+     * GN*/GP* sentence as an old-spec $GP sentence. NMEA 4.10 added fields (RMC: navigational status), and
+     * the navigation programs only accept the exact old field counts (e.g. ATLAN: GGA 16, GSA 19, RMC 14/13
+     * including the checksum token), so extra trailing fields are dropped and the checksum recalculated.
+     */
+    private static String legacySentence(String s, String type) {
+        int star = s.indexOf('*');
+        String body = star > 0 ? s.substring(1, star) : s.substring(1);
+        String[] f = body.split(",", -1);
+        int keep; /* tokens to keep, including the sentence id */
+        switch (type) {
+            case "RMC": keep = 13; break;
+            case "GGA": keep = 15; break;
+            case "VTG": keep = 10; break;
+            case "GLL": keep = 8; break;
+            default: return null;
+        }
+        int n = Math.min(keep, f.length);
+        StringBuilder sb = new StringBuilder("GP").append(type);
+        for (int i = 1; i < n; i++) sb.append(',').append(f[i]);
+        return withChecksum(sb.toString());
+    }
+
+    /** One GSA (used satellites) and the GSV lines (satellites in view), covering every constellation. */
+    private String buildSatelliteSentences() {
+        ArrayList<Sat> sats = gpsSatellites();
+        Location location = lastLocation;
+        boolean fix = location != null && System.currentTimeMillis() - location.getTime() <= 10000;
+
+        int usedCount = 0;
+        StringBuilder slots = new StringBuilder();
+        for (Sat sat : sats) {
+            if (!sat.used || usedCount >= 12) continue;
+            slots.append(String.format(Locale.US, "%02d,", sat.prn));
+            usedCount++;
+        }
+        for (int i = usedCount; i < 12; i++) slots.append(",");
+
+        String gsa;
+        if (fix) {
+            float accuracy = location.hasAccuracy() ? location.getAccuracy() : 5f;
+            double hdop = Math.max(0.5, accuracy / 5.0);
+            gsa = String.format(Locale.US, "GPGSA,A,3,%s%.1f,%.1f,%.1f", slots, hdop*1.5, hdop, hdop*1.2);
+        }
+        else gsa = "GPGSA,A,1,"+slots+",,";
+        return withChecksum(gsa) + buildGSV(sats);
+    }
+
+    /**
+     * Old navigation programs only understand GPS (PRN 1-32), but this phone fixes mostly on GLONASS, Galileo and
+     * BeiDou. Report every constellation's satellites (real elevation, azimuth, signal and used-in-fix state)
+     * numbered 1..32 in a stable order, so "satellites in view / used" and the sky plot make sense to them.
+     */
     private ArrayList<Sat> gpsSatellites() {
         ArrayList<Sat> list = new ArrayList<>();
         GnssStatus status = gnssStatus;
         if (status == null) return list;
-        for (int i = 0; i < status.getSatelliteCount(); i++) {
-            if (status.getConstellationType(i) != GnssStatus.CONSTELLATION_GPS) continue;
+
+        final GnssStatus st = status;
+        ArrayList<Integer> order = new ArrayList<>();
+        for (int i = 0; i < st.getSatelliteCount(); i++) order.add(i);
+        java.util.Collections.sort(order, (x, y) -> {
+            int c = Integer.compare(st.getConstellationType(x), st.getConstellationType(y));
+            return c != 0 ? c : Integer.compare(st.getSvid(x), st.getSvid(y));
+        });
+
+        int number = 1;
+        for (int i : order) {
+            if (number > 32) break;
             Sat sat = new Sat();
-            sat.prn = status.getSvid(i);
-            sat.elev = (int)status.getElevationDegrees(i);
-            sat.az = (int)status.getAzimuthDegrees(i);
-            sat.snr = (int)status.getCn0DbHz(i);
-            sat.used = status.usedInFix(i);
+            sat.prn = number++;
+            sat.elev = (int)st.getElevationDegrees(i);
+            sat.az = (int)st.getAzimuthDegrees(i);
+            sat.snr = (int)st.getCn0DbHz(i);
+            sat.used = st.usedInFix(i);
             list.add(sat);
         }
         return list;
